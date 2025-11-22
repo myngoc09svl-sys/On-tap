@@ -1,0 +1,1149 @@
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    // CẤU HÌNH MATHJAX: Đảm bảo MathJax xử lý đúng các công thức LaTeX
+    window.MathJax = {
+        tex: {
+            inlineMath: [['$', '$'], ['\\(', '\\)']],
+            displayMath: [['$$', '$$'], ['\\[', '\\]']]
+        },
+        svg: {
+            fontCache: 'global'
+        },
+        startup: {
+            // Tắt render tự động khi khởi động để chúng ta có thể gọi thủ công sau khi tải nội dung
+            ready: () => {
+                MathJax.startup.defaultReady();
+                // Bắt đầu trò chơi sau khi MathJax đã sẵn sàng
+                if (document.readyState === 'complete') {
+                    startInitialSetup();
+                } else {
+                    window.addEventListener('load', startInitialSetup);
+                }
+            }
+        }
+    };
+    
+    // Hàm để chuyển đổi PCM 16-bit sang WAV và phát âm thanh
+    function base64ToArrayBuffer(base64) {
+        const binaryString = atob(base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    function pcmToWav(pcm16, sampleRate = 24000) {
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const byteRate = numChannels * sampleRate * (bitsPerSample / 8);
+        const blockAlign = numChannels * (bitsPerSample / 8);
+
+        const buffer = new ArrayBuffer(44 + pcm16.length * 2);
+        const view = new DataView(buffer);
+        let offset = 0;
+
+        function writeString(s) {
+            for (let i = 0; i < s.length; i++) {
+                view.setUint8(offset + i, s.charCodeAt(i));
+            }
+            offset += s.length;
+        }
+
+        function writeUint32(i) {
+            view.setUint32(offset, i, true);
+            offset += 4;
+        }
+
+        function writeUint16(i) {
+            view.setUint16(offset, i, true);
+            offset += 2;
+        }
+
+        // RIFF chunk
+        writeString('RIFF');
+        writeUint32(36 + pcm16.length * 2);
+        writeString('WAVE');
+
+        // FMT sub-chunk
+        writeString('fmt ');
+        writeUint32(16); // Sub-chunk size
+        writeUint16(1); // Audio format (1 for PCM)
+        writeUint16(numChannels);
+        writeUint32(sampleRate);
+        writeUint32(byteRate);
+        writeUint16(blockAlign);
+        writeUint16(bitsPerSample);
+
+        // DATA sub-chunk
+        writeString('data');
+        writeUint32(pcm16.length * 2);
+
+        // Write PCM data
+        for (let i = 0; i < pcm16.length; i++) {
+            view.setInt16(offset, pcm16[i], true);
+            offset += 2;
+        }
+
+        return new Blob([view], { type: 'audio/wav' });
+    }
+
+    // --- Audio Generation Logic ---
+    const AUDIO_CACHE = {};
+    const AUDIO_VOICES = {
+        correct: { text: "Tuyệt vời!", voiceName: "Kore" },
+        wrong: { text: "Sai rồi.", voiceName: "Fenrir" }
+    };
+
+    async function generateAndPlayAudio(type) {
+        const { text, voiceName } = AUDIO_VOICES[type];
+        if (AUDIO_CACHE[type]) {
+            playAudio(AUDIO_CACHE[type]);
+            return;
+        }
+
+        const apiKey = "";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+
+        const payload = {
+            contents: [{ parts: [{ text: text }] }],
+            generationConfig: {
+                responseModalities: ["AUDIO"],
+                speechConfig: {
+                    voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } }
+                }
+            },
+            model: "gemini-2.5-flash-preview-tts"
+        };
+
+        try {
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            const part = result?.candidates?.[0]?.content?.parts?.[0];
+            const audioData = part?.inlineData?.data;
+            const mimeType = part?.inlineData?.mimeType;
+
+            if (audioData && mimeType && mimeType.startsWith("audio/")) {
+                // Assuming sample rate of 24000 for simplicity as it's the default
+                const sampleRate = 24000;
+                const pcmData = base64ToArrayBuffer(audioData);
+                const pcm16 = new Int16Array(pcmData);
+                const wavBlob = pcmToWav(pcm16, sampleRate);
+                const audioUrl = URL.createObjectURL(wavBlob);
+                AUDIO_CACHE[type] = audioUrl;
+                playAudio(audioUrl);
+            }
+        } catch (error) {
+            console.error("Lỗi tạo hoặc phát âm thanh:", error);
+        }
+    }
+
+    function playAudio(url) {
+        const audio = new Audio(url);
+        audio.play().catch(e => console.error("Lỗi phát Audio:", e));
+    }
+
+    // --- Quiz Data ---
+    const QUIZ_QUESTIONS = [
+        // --------------------------------------------------------------------------------
+        // CHƯƠNG 1: SỐ TỰ NHIÊN (10 câu)
+        // --------------------------------------------------------------------------------
+        {
+            id: 1,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Tập hợp $A = \\{x \\in \\mathbb{N} | 18 < x < 21\\}$ có bao nhiêu phần tử?",
+            options: [
+                { text: "1", correct: false, rationale: "Tập hợp A chứa các số $\\{19, 20\\}$." },
+                { text: "2", correct: true, rationale: "Tập hợp A chỉ chứa các số tự nhiên $\\{19, 20\\}$, do đó có 2 phần tử." },
+                { text: "3", correct: false, rationale: "Cần liệt kê chính xác các số tự nhiên lớn hơn 18 và nhỏ hơn 21." },
+                { text: "Vô số", correct: false, rationale: "Đây là tập hợp hữu hạn, không phải vô số." }
+            ],
+            answer: "2",
+            hint: "Hãy liệt kê các số tự nhiên lớn hơn 18 và nhỏ hơn 21."
+        },
+        {
+            id: 2,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Giá trị của biểu thức $84:4 + 3^9:3^7 + 5^0$ là bao nhiêu?",
+            options: [
+                { text: "30", correct: false, rationale: "Tính toán lại phép lũy thừa và thứ tự ưu tiên." },
+                { text: "31", correct: true, rationale: "Thực hiện phép tính: $21 + 3^2 + 1 = 21 + 9 + 1 = 31$." },
+                { text: "32", correct: false, rationale: "Nhớ rằng bất kỳ số nào mũ 0 cũng bằng 1." },
+                { text: "29", correct: false, rationale: "Cần áp dụng đúng thứ tự thực hiện phép tính." }
+            ],
+            answer: "31",
+            hint: "Quy tắc lũy thừa: $a^m : a^n = a^{m-n}$ và $a^0 = 1$."
+        },
+        {
+            id: 3,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Số nào trong các số sau đây chia hết cho cả 3 và 5: 4827; 5670; 6915; 2007?",
+            options: [
+                { text: "4827", correct: false, rationale: "Số này không chia hết cho 5." },
+                { text: "5670", correct: true, rationale: "Tận cùng là 0 (chia hết cho 5), tổng các chữ số là $18$ (chia hết cho 3)." },
+                { text: "6915", correct: false, rationale: "Số này chia hết cho 5, nhưng tổng các chữ số là $21$ (chia hết cho 3)." },
+                { text: "2007", correct: false, rationale: "Số này không chia hết cho 5." }
+            ],
+            answer: "5670",
+            hint: "Một số chia hết cho 5 khi tận cùng là 0 hoặc 5. Chia hết cho 3 khi tổng các chữ số chia hết cho 3."
+        },
+        {
+            id: 4,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Số tự nhiên $x$ lớn nhất thỏa mãn $24 \\vdots x$, $36 \\vdots x$, và $160 \\vdots x$ là bao nhiêu?",
+            options: [
+                { text: "8", correct: false, rationale: "Số 8 không là ước của 36." },
+                { text: "12", correct: false, rationale: "12 không là ước của 160." },
+                { text: "4", correct: true, rationale: "ƯCLN của $24, 36, 160$ là $4$." },
+                { text: "2", correct: false, rationale: "Có ước chung lớn hơn là $4$." }
+            ],
+            answer: "4",
+            hint: "Bạn cần tìm ƯCLN (Ước chung lớn nhất) của $24, 36$ và $160$."
+        },
+        {
+            id: 5,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Thực hiện phép tính nhanh: $12 \\cdot 35 + 35 \\cdot 182 - 35 \\cdot 94$.",
+            options: [
+                { text: "3500", correct: true, rationale: "Áp dụng tính chất phân phối: $35 \\cdot (12 + 182 - 94) = 35 \\cdot 100 = 3500$." },
+                { text: "350", correct: false, rationale: "Kết quả đúng là $3500$." },
+                { text: "3000", correct: false, rationale: "Tính toán lại tổng hiệu trong ngoặc." },
+                { text: "3150", correct: false, rationale: "Kết quả tính sai." }
+            ],
+            answer: "3500",
+            hint: "Sử dụng tính chất phân phối $a \\cdot b + a \\cdot c - a \\cdot d = a \\cdot (b + c - d)$."
+        },
+        {
+            id: 6,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Tính giá trị của biểu thức $295-(31-2^{2} \\cdot 5)^{2}$.",
+            answer: "174", // ĐÃ SỬA: 295 - (31 - 20)^2 = 295 - 11^2 = 295 - 121 = 174
+            hint: "Ưu tiên tính lũy thừa, phép nhân, phép trừ trong ngoặc trước. Kết quả trong ngoặc là 11."
+        },
+        {
+            id: 7,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Tìm số tự nhiên $x$ biết $87-(73-x)=20$.",
+            answer: "6",
+            hint: "Tìm giá trị của $(73-x)$ trước, sau đó tìm $x$."
+        },
+        {
+            id: 8,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Số tự nhiên $x$ nhỏ nhất khác $0$ thỏa mãn $x \\vdots 4$, $x \\vdots 7$, $x \\vdots 8$ là bao nhiêu?",
+            options: [
+                { text: "28", correct: false, rationale: "28 không chia hết cho 8." },
+                { text: "56", correct: true, rationale: "Đây là BCNN của $4, 7, 8$, có giá trị là $56$." },
+                { text: "168", correct: false, rationale: "Là một bội chung, nhưng không phải nhỏ nhất khác $0$." },
+                { text: "4", correct: false, rationale: "4 không chia hết cho 7 và 8." }
+            ],
+            answer: "56",
+            hint: "Bạn cần tìm BCNN (Bội chung nhỏ nhất) của $4, 7$ và $8$."
+        },
+        {
+            id: 9,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Một lớp học có 24 nam và 18 nữ. Hỏi có thể chia lớp thành nhiều nhất bao nhiêu nhóm mà số nam và số nữ được chia đều vào mỗi nhóm?",
+            answer: "6",
+            hint: "Cần tìm ƯCLN của $24$ và $18$."
+        },
+        {
+            id: 10,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Tìm $x$ biết $4^{x}=64$.",
+            options: [
+                { text: "2", correct: false, rationale: "$4^2 = 16$." },
+                { text: "3", correct: true, rationale: "$4^3 = 64$." },
+                { text: "4", correct: false, rationale: "$4^4 = 256$." },
+                { text: "16", correct: false, rationale: "Đây là cơ số chứ không phải số mũ." }
+            ],
+            answer: "3",
+            hint: "Hãy viết $64$ dưới dạng lũy thừa của $4$."
+        },
+
+        // --------------------------------------------------------------------------------
+        // CHƯƠNG 2: SỐ NGUYÊN (10 câu)
+        // --------------------------------------------------------------------------------
+        {
+            id: 11,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Số đối của số nguyên $-100$ là số nào?",
+            options: [
+                { text: "$100$", correct: true, rationale: "Số đối của một số nguyên $a$ là số $-a$." },
+                { text: "$-100$", correct: false, rationale: "Số đối không phải là chính nó." },
+                { text: "$0$", correct: false, rationale: "Số đối của $0$ là $0$." },
+                { text: "$1/100$", correct: false, rationale: "Đây là nghịch đảo, không phải số đối." }
+            ],
+            answer: "100",
+            hint: "Số đối của $a$ là $-a$, và số đối của $-a$ là $a$."
+        },
+        {
+            id: 12,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "So sánh hai số nguyên $-28$ và $-56$. Kết quả nào đúng?",
+            options: [
+                { text: "$-28 < -56$", correct: false, rationale: "Số nguyên âm có giá trị tuyệt đối nhỏ hơn thì lớn hơn." },
+                { text: "$-28 > -56$", correct: true, rationale: "Trên trục số, $-28$ nằm bên phải $-56$ nên lớn hơn." },
+                { text: "$-28 = -56$", correct: false, rationale: "Hai số này có giá trị khác nhau." },
+                { text: "Không so sánh được", correct: false, rationale: "Hoàn toàn có thể so sánh được hai số nguyên." }
+            ],
+            answer: "$-28 > -56$",
+            hint: "Số nguyên âm càng gần $0$ thì càng lớn."
+        },
+        {
+            id: 13,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Tính tổng: $(-40) + (-25)$.",
+            answer: "-65",
+            hint: "Cộng hai số nguyên âm ta cộng các giá trị tuyệt đối và đặt dấu âm."
+        },
+        {
+            id: 14,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Kết quả của phép tính $(-8) \\cdot (-15)$ là bao nhiêu?",
+            options: [
+                { text: "$-120$", correct: false, rationale: "Tích của hai số âm là một số dương." },
+                { text: "$120$", correct: true, rationale: "Tích của hai số nguyên âm là một số nguyên dương." },
+                { text: "$-23$", correct: false, rationale: "Đây là phép nhân, không phải phép cộng." },
+                { text: "$7$", correct: false, rationale: "Đây là phép nhân, không phải phép cộng." }
+            ],
+            answer: "120",
+            hint: "Nhân hai số cùng dấu sẽ cho ra kết quả dương."
+        },
+        {
+            id: 15,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Sắp xếp các số nguyên sau theo thứ tự tăng dần: $5; -7; 4; -12; 0; -3; -5; 1$. Thứ tự đúng là:",
+            options: [
+                { text: "$-7; -12; -5; -3; 0; 1; 4; 5$", correct: false, rationale: "Kiểm tra lại thứ tự của $-7$ và $-12$." },
+                { text: "$5; 4; 1; 0; -3; -5; -7; -12$", correct: false, rationale: "Đây là thứ tự giảm dần." },
+                { text: "$-12; -7; -5; -3; 0; 1; 4; 5$", correct: true, rationale: "Số âm nhỏ nhất là $-12$, sau đó tăng dần đến số dương lớn nhất là $5$." },
+                { text: "$-12; -7; -5; 0; -3; 1; 4; 5$", correct: false, rationale: "Kiểm tra lại vị trí của $-3$ và $0$." }
+            ],
+            answer: "$-12; -7; -5; -3; 0; 1; 4; 5$",
+            hint: "Hãy bắt đầu bằng số nguyên âm có giá trị tuyệt đối lớn nhất."
+        },
+        {
+            id: 16,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Tìm số nguyên $x$ biết $x^2 = 100$. (Chỉ nhập số nguyên dương).",
+            answer: "10",
+            hint: "Một số $x$ bình phương bằng $100$, $x$ có thể là số dương hoặc số âm."
+        },
+        {
+            id: '17',
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Giá trị của biểu thức $(-524) - [(476 + 245) - 45]$ là bao nhiêu?",
+            options: [
+                { text: "$-1200$", correct: true, rationale: "Áp dụng tính hợp lý: $(-524 - 476) + (-245 + 45) = -1000 + (-200) = -1200$." },
+                { text: "$-120$", correct: false, rationale: "Kết quả đúng phải là $-1200$." },
+                { text: "$-1450$", correct: false, rationale: "Tính toán lại." },
+                { text: "$-1000$", correct: false, rationale: "Còn thiếu một phần của phép tính." }
+            ],
+            answer: "$-1200$",
+            hint: "Sử dụng quy tắc bỏ dấu ngoặc và nhóm các số tròn nghìn hoặc tròn trăm."
+        },
+        {
+            id: 18,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Nhiệt độ buổi sáng là $-4^{\\circ}C$, buổi trưa tăng $7^{\\circ}C$. Hỏi nhiệt độ buổi trưa là bao nhiêu độ $\\text{C}$?",
+            answer: "3",
+            hint: "Thực hiện phép cộng số nguyên: $-4 + 7$."
+        },
+        {
+            id: 19,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Hiệu độ cao giữa đỉnh núi $1500 \\text{ m}$ và đáy hang $-200 \\text{ m}$ là bao nhiêu mét?",
+            options: [
+                { text: "$1300 \\text{ m}$", correct: false, rationale: "Đây là phép trừ: $1500 - 200$." },
+                { text: "$1700 \\text{ m}$", correct: true, rationale: "Hiệu độ cao là $1500 - (-200) = 1700$ mét." },
+                { text: "$200 \\text{ m}$", correct: false, rationale: "Đây là độ sâu của hang." },
+                { text: "$1000 \\text{ m}$", correct: false, rationale: "Tính toán lại." }
+            ],
+            answer: "$1700 \\text{ m}$",
+            hint: "Để tính chênh lệch, bạn cần lấy độ cao lớn hơn trừ đi độ cao nhỏ hơn."
+        },
+        {
+            id: 20,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Đâu là kết quả đúng của phép tính: $36 - 38$?",
+            options: [
+                { text: "$2$", correct: false, rationale: "Phép tính này là phép trừ số nguyên." },
+                { text: "$-2$", correct: true, rationale: "Thực hiện phép trừ: $36 - 38 = -(38 - 36) = -2$." },
+                { text: "$74$", correct: false, rationale: "Đây là phép cộng không đúng." },
+                { text: "$-74$", correct: false, rationale: "Đây là phép cộng không đúng." }
+            ],
+            answer: "-2",
+            hint: "Bạn đang trừ một số lớn hơn cho một số nhỏ hơn."
+        },
+
+        // --------------------------------------------------------------------------------
+        // CHƯƠNG 3: CÁC HÌNH PHẲNG (20 câu)
+        // --------------------------------------------------------------------------------
+        {
+            id: 21,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Diện tích hình bình hành có độ dài một cạnh $15 \\text{cm}$ và chiều cao tương ứng $6 \\text{cm}$ là bao nhiêu?",
+            options: [
+                { text: "$21 \\text{ cm}^2$", correct: false, rationale: "Diện tích hình bình hành bằng cạnh đáy nhân chiều cao tương ứng." },
+                { text: "$45 \\text{ cm}^2$", correct: false, rationale: "Diện tích là $15 \\cdot 6$." },
+                { text: "$90 \\text{ cm}^2$", correct: true, rationale: "Diện tích $= 15 \\cdot 6 = 90 \\text{ cm}^2$." },
+                { text: "$180 \\text{ cm}^2$", correct: false, rationale: "Tính toán lại." }
+            ],
+            answer: "$90 \\text{ cm}^2$",
+            hint: "Công thức diện tích hình bình hành: $S = a \\cdot h$."
+        },
+        {
+            id: 22,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Diện tích hình thoi có độ dài hai đường chéo là $4 \\text{m}$ và $25 \\text{dm}$ là bao nhiêu $\\text{m}^2$?",
+            options: [
+                { text: "$50 \\text{ m}^2$", correct: false, rationale: "Cần đổi đơn vị $25 \\text{ dm} = 2.5 \\text{ m}$." },
+                { text: "$5 \\text{ m}^2$", correct: true, rationale: "Đổi đơn vị: $25 \\text{ dm} = 2.5 \\text{ m}$. Diện tích $= \\frac{1}{2} \\cdot 4 \\cdot 2.5 = 5 \\text{ m}^2$." },
+                { text: "$2.5 \\text{ m}^2$", correct: false, rationale: "Diện tích bằng nửa tích hai đường chéo." },
+                { text: "$10 \\text{ m}^2$", correct: false, rationale: "Chưa nhân với $\\frac{1}{2}$." }
+            ],
+            answer: "$5 \\text{ m}^2$",
+            hint: "Đầu tiên, hãy đổi $25 \\text{ dm}$ ra đơn vị mét."
+        },
+        {
+            id: 23,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Hình chữ nhật có chiều dài $12 \\text{cm}$ và chiều rộng $8 \\text{ cm}$. Tính chu vi hình chữ nhật đó (đơn vị $\\text{cm}$).",
+            answer: "40",
+            hint: "Công thức chu vi hình chữ nhật: $P = 2 \\cdot (a+b)$."
+        },
+        {
+            id: 24,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Diện tích hình thang cân có độ dài hai cạnh đáy là $7 \\text{m}$ và $4 \\text{m}$; chiều cao là $3,5 \\text{m}$ là bao nhiêu $\\text{m}^2$?",
+            options: [
+                { text: "$12.25 \\text{ m}^2$", correct: false, rationale: "Áp dụng công thức $S = \\frac{(7+4) \\cdot 3.5}{2}$." },
+                { text: "$19.25 \\text{ m}^2$", correct: true, rationale: "Diện tích $= \\frac{(7+4) \\cdot 3.5}{2} = 19.25 \\text{ m}^2$." },
+                { text: "$22 \\text{ m}^2$", correct: false, rationale: "Bạn có thể đã nhân mà chưa chia $2$." },
+                { text: "$15.5 \\text{ m}^2$", correct: false, rationale: "Tính toán lại." }
+            ],
+            answer: "$19.25 \\text{ m}^2$",
+            hint: "Công thức diện tích hình thang: $S = \\frac{(a+b) \\cdot h}{2}$."
+        },
+        {
+            id: 25,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Hình vuông có cạnh $6 \\text{ cm}$. Diện tích của nó là bao nhiêu $\\text{cm}^2$?",
+            options: [
+                { text: "$24 \\text{ cm}^2$", correct: false, rationale: "Đây là chu vi." },
+                { text: "$12 \\text{ cm}^2$", correct: false, rationale: "Đúng là phép nhân $6 \\cdot 6$." },
+                { text: "$36 \\text{ cm}^2$", correct: true, rationale: "Diện tích $= 6^2 = 36 \\text{ cm}^2$." },
+                { text: "$6 \\text{ cm}^2$", correct: false, rationale: "Sai công thức." }
+            ],
+            answer: "$36 \\text{ cm}^2$",
+            hint: "Diện tích hình vuông bằng bình phương cạnh."
+        },
+        {
+            id: 26,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Chu vi hình thoi có cạnh $5 \\text{cm}$ là bao nhiêu $\\text{cm}$?",
+            answer: "20",
+            hint: "Hình thoi có 4 cạnh bằng nhau."
+        },
+        {
+            id: 27,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Hình chữ nhật $\\text{ABCD}$ có $AB = 3 \\text{cm}$ và chu vi $14 \\text{cm}$. Độ dài cạnh $\\text{BC}$ là bao nhiêu $\\text{cm}$?",
+            options: [
+                { text: "$4 \\text{ cm}$", correct: true, rationale: "Nửa chu vi là $14:2 = 7 \\text{ cm}$. Cạnh $\\text{BC} = 7 - 3 = 4 \\text{ cm}$." },
+                { text: "$3.5 \\text{ cm}$", correct: false, rationale: "Tính toán lại." },
+                { text: "$11 \\text{ cm}$", correct: false, rationale: "Đây là nửa chu vi." },
+                { text: "$5 \\text{ cm}$", correct: false, rationale: "Tính toán lại." }
+            ],
+            answer: "$4 \\text{ cm}$",
+            hint: "Nửa chu vi hình chữ nhật là tổng của chiều dài và chiều rộng."
+        },
+        {
+            id: 28,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Sân nhà bác Hùng hình chữ nhật dài $12 \\text{m}$, rộng $9 \\text{m}$. Diện tích sân là bao nhiêu $\\text{m}^2$?",
+            answer: "108",
+            hint: "Diện tích hình chữ nhật bằng dài nhân rộng."
+        },
+        {
+            id: 29,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Một lối đi hình chữ nhật có chiều dài $12 \\text{m}$ và chiều rộng $2 \\text{m}$. Tổng chi phí lát gạch (với $100.000$ đồng$/\\text{m}^2$) là bao nhiêu đồng?",
+            options: [
+                { text: "$2.400.000$ đồng", correct: true, rationale: "Diện tích $= 12 \\cdot 2 = 24 \\text{ m}^2$. Chi phí $= 24 \\cdot 100.000 = 2.400.000$ đồng." },
+                { text: "$1.200.000$ đồng", correct: false, rationale: "Bạn có thể đã tính sai diện tích." },
+                { text: "$24.000.000$ đồng", correct: false, rationale: "Bạn có thể đã nhân sai." },
+                { text: "$240.000$ đồng", correct: false, rationale: "Bạn có thể đã nhân sai." }
+            ],
+            answer: "$2.400.000$ đồng",
+            hint: "Đầu tiên, tính diện tích lối đi."
+        },
+        {
+            id: 30,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Một mảnh vườn hình vuông cạnh $10 \\text{m}$ có lối đi **xung quanh** rộng $2 \\text{m}$. Độ dài cạnh của mảnh vườn trồng rau hình vuông bên trong là bao nhiêu $\\text{m}$?",
+            answer: "6",
+            hint: "Lối đi xung quanh làm giảm $2 \\cdot 2 = 4 \\text{m}$ vào mỗi chiều của mảnh đất."
+        },
+        {
+            id: 31,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Chu vi của hình bình hành có độ dài hai cạnh là $10 \\text{cm}$ và $14 \\text{cm}$ là bao nhiêu $\\text{cm}$?",
+            options: [
+                { text: "$24 \\text{ cm}$", correct: false, rationale: "Chu vi bằng tổng độ dài 4 cạnh." },
+                { text: "$48 \\text{ cm}$", correct: true, rationale: "Chu vi $= 2 \\cdot (10 + 14) = 48 \\text{ cm}$." },
+                { text: "$140 \\text{ cm}$", correct: false, rationale: "Đây là diện tích (nếu chiều cao là 14)." },
+                { text: "$28 \\text{ cm}$", correct: false, rationale: "Chưa tính cạnh $10 \\text{ cm}$." }
+            ],
+            answer: "$48 \\text{ cm}$",
+            hint: "Công thức chu vi hình bình hành: $P = 2 \\cdot (a+b)$."
+        },
+        {
+            id: 32,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Hình thoi có độ dài hai đường chéo là $6 \\text{cm}$ và $8 \\text{cm}$. Tính diện tích hình thoi đó (đơn vị $\\text{cm}^2$).",
+            answer: "24",
+            hint: "Công thức diện tích hình thoi: $S = \\frac{1}{2} \\cdot d_1 \\cdot d_2$."
+        },
+        {
+            id: 33,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Mảnh đất hình chữ nhật dài $12 \\text{m}$, rộng $10 \\text{m}$. Diện tích khu vực trồng hoa hình bình hành $\\text{AMCN}$ (có đáy $\\text{AM} = 6 \\text{m}$ và chiều cao $\\text{AD} = 10 \\text{m}$) là bao nhiêu $\\text{m}^2$?",
+            options: [
+                { text: "$120 \\text{ m}^2$", correct: false, rationale: "Đây là diện tích toàn bộ mảnh đất." },
+                { text: "$60 \\text{ m}^2$", correct: true, rationale: "Diện tích $= \\text{AM} \\cdot \\text{AD} = 6 \\cdot 10 = 60 \\text{ m}^2$." },
+                { text: "$30 \\text{ m}^2$", correct: false, rationale: "Bạn có thể đã chia $2$." },
+                { text: "$22 \\text{ m}^2$", correct: false, rationale: "Cần lấy đáy nhân với chiều cao tương ứng." }
+            ],
+            answer: "$60 \\text{ m}^2$",
+            hint: "Diện tích hình bình hành bằng đáy nhân chiều cao."
+        },
+        {
+            id: 34,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Tổng diện tích trồng hoa và trồng cỏ (trên mảnh đất dài $12 \\text{m}$, rộng $10 \\text{m}$) là bao nhiêu $\\text{m}^2$?",
+            answer: "120",
+            hint: "Tổng diện tích bằng diện tích mảnh đất hình chữ nhật."
+        },
+        {
+            id: 35,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Hình thang cân có hai đáy $4 \\text{cm}$ và $10 \\text{cm}$, chiều cao $4 \\text{cm}$. Tính diện tích hình thang (đơn vị $\\text{cm}^2$)?",
+            options: [
+                { text: "$14 \\text{ cm}^2$", correct: false, rationale: "Áp dụng công thức diện tích hình thang." },
+                { text: "$28 \\text{ cm}^2$", correct: true, rationale: "Diện tích $= \\frac{(4+10) \\cdot 4}{2} = 28 \\text{ cm}^2$." },
+                { text: "$56 \\text{ cm}^2$", correct: false, rationale: "Bạn có thể đã không chia $2$." },
+                { text: "$18 \\text{ cm}^2$", correct: false, rationale: "Tính toán lại." }
+            ],
+            answer: "$28 \\text{ cm}^2$",
+            hint: "Sử dụng công thức diện tích hình thang."
+        },
+        {
+            id: 36,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Để lát sân hình chữ nhật $12 \\text{m} \\times 9 \\text{m}$ bằng gạch vuông cạnh $0,6 \\text{m}$, cần bao nhiêu viên gạch?",
+            options: [
+                { text: "250 viên", correct: false, rationale: "Tổng diện tích sân $= 108 \\text{ m}^2$. Diện tích gạch $= 0.36 \\text{ m}^2$." },
+                { text: "300 viên", correct: true, rationale: "Số gạch $= \\frac{108}{0.36} = 300$ viên." },
+                { text: "180 viên", correct: false, rationale: "Tính toán lại." },
+                { text: "350 viên", correct: false, rationale: "Tính toán lại." }
+            ],
+            answer: "300 viên",
+            hint: "Số viên gạch = Diện tích sân $\\text{ /}$ Diện tích $1$ viên gạch."
+        },
+        {
+            id: 37,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Tính độ dài hàng rào xung quanh mảnh vườn trồng rau hình vuông có cạnh $8 \\text{m}$, có cửa ra vào rộng $2 \\text{m}$ (đơn vị $\\text{m}$).",
+            answer: "30",
+            hint: "Chu vi hàng rào = Chu vi hình vuông - độ rộng cửa."
+        },
+        {
+            id: 38,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Một đoạn thẳng dài $198 \\text{mm}$ được cắt thành 3 đoạn bằng nhau. Hỏi độ dài mỗi đoạn (tức là độ dài cạnh của tam giác đều được tạo ra từ 3 đoạn này) là bao nhiêu $\\text{mm}$?",
+            options: [
+                { text: "$66 \\text{ mm}$", correct: true, rationale: "Độ dài cạnh $= 198 : 3 = 66 \\text{ mm}$." },
+                { text: "$33 \\text{ mm}$", correct: false, rationale: "Bạn có thể đã chia 6." },
+                { text: "$198 \\text{ mm}$", correct: false, rationale: "Đây là độ dài ống hút ban đầu." },
+                { text: "$54 \\text{ mm}$", correct: false, rationale: "Tính toán lại." }
+            ],
+            answer: "$66 \\text{ mm}$",
+            hint: "Lấy độ dài đoạn thẳng chia cho số đoạn cắt ra."
+        },
+        {
+            id: 39,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Chi phí trồng hoa (diện tích $60 \\text{ m}^2$) với giá $50.000$ đồng$/\\text{m}^2$ là bao nhiêu đồng?",
+            answer: "3000000",
+            hint: "Chi phí $=$ Diện tích $\\cdot$ Đơn giá."
+        },
+        {
+            id: 40,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Trên mảnh đất $12 \\text{m} \\times 10 \\text{m}$ (diện tích $120 \\text{ m}^2$), diện tích trồng hoa là $60 \\text{ m}^2$. Tính diện tích trồng cỏ (đơn vị $\\text{m}^2$).",
+            answer: "60",
+            hint: "Diện tích cỏ $=$ Tổng diện tích $-$ Diện tích hoa."
+        },
+
+        // --------------------------------------------------------------------------------
+        // CHƯƠNG 4: THỐNG KÊ (10 câu) - ĐÃ SỬA DỮ LIỆU BỊ MẤT
+        // --------------------------------------------------------------------------------
+        {
+            id: 41,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Thời gian làm bài tập Toán (phút) của 20 HS lớp 6A là: $10, 5, 8, 8, 9, 7, 8, 9, 14, 8, 5, 7, 8, 10, 9, 8, 10, 7, 14, 8$. Có bao nhiêu bạn làm bài trong thời gian ngắn nhất?",
+            options: [
+                { text: "1 bạn", correct: false, rationale: "Thời gian ngắn nhất là $5$ phút." },
+                { text: "2 bạn", correct: true, rationale: "Thời gian ngắn nhất là $5$ phút, xuất hiện $2$ lần." },
+                { text: "3 bạn", correct: false, rationale: "Kiểm tra lại số lần xuất hiện của thời gian ngắn nhất." },
+                { text: "4 bạn", correct: false, rationale: "Thời gian $7$ phút có $4$ lần xuất hiện, nhưng $5$ phút mới là ngắn nhất." }
+            ],
+            answer: "2 bạn",
+            hint: "Tìm giá trị nhỏ nhất trong dãy số liệu và đếm tần số của nó."
+        },
+        {
+            id: 42,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Bảng điểm kiểm tra Tổ 1 gồm các điểm: $7, 8, 7, 10, 6, 5, 9, 10, 4, 8$. Điểm cao nhất mà các bạn đạt được là bao nhiêu?",
+            options: [
+                { text: "9", correct: false, rationale: "Có điểm $10$." },
+                { text: "10", correct: true, rationale: "Điểm cao nhất là $10$, xuất hiện $2$ lần." },
+                { text: "4", correct: false, rationale: "Đây là điểm thấp nhất." },
+                { text: "8", correct: false, rationale: "Không phải cao nhất." }
+            ],
+            answer: "10",
+            hint: "Xem giá trị lớn nhất trong dãy điểm."
+        },
+        {
+            id: 43,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Bảng điểm kiểm tra Tổ 1 gồm các điểm: $7, 8, 7, 10, 6, 5, 9, 10, 4, 8$. Số học sinh có điểm dưới $7$ là bao nhiêu?",
+            options: [
+                { text: "1", correct: false, rationale: "Điểm dưới $7$ là $4, 5, 6$." },
+                { text: "2", correct: false, rationale: "Điểm dưới $7$ là $4$ (Lộc), $5$ (Hùng), $6$ (Hiếu)." },
+                { text: "3", correct: true, rationale: "Có $3$ học sinh đạt điểm dưới $7$ ($4, 5, 6$)." },
+                { text: "4", correct: false, rationale: "Sai số lượng." }
+            ],
+            answer: "3",
+            hint: "Liệt kê và đếm các điểm $6, 5, 4$."
+        },
+        {
+            id: 44,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Số học viên CLB Tiếng Nhật các năm là: $2017: 30; 2018: 40; 2019: 50; 2020: 60$. Năm $2020$ nhiều hơn năm $2017$ bao nhiêu học viên?",
+            options: [
+                { text: "10 học viên", correct: false, rationale: "Đây là chênh lệch giữa các năm liên tiếp." },
+                { text: "20 học viên", correct: false, rationale: "Tính toán lại." },
+                { text: "30 học viên", correct: true, rationale: "Chênh lệch $= 60 - 30 = 30$ học viên. Đã sửa lỗi đáp án." },
+                { text: "40 học viên", correct: false, rationale: "Chênh lệch $= 60 - 30$." }
+            ],
+            answer: "30 học viên",
+            hint: "Thực hiện phép trừ: Số học viên năm $2020$ trừ đi năm $2017$."
+        },
+        {
+            id: 45,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Dữ liệu điểm 10 môn Toán theo ngày là: Thứ Hai: $2$, Thứ Ba: $3$, Thứ Tư: $5$, Thứ Năm: $4$, Thứ Sáu: $2$. Ngày nào có số học sinh đạt điểm $10$ nhiều nhất?",
+            options: [
+                { text: "Thứ Hai", correct: false, rationale: "Chỉ có $2$ điểm $10$." },
+                { text: "Thứ Tư", correct: true, rationale: "Có $5$ điểm $10$, là số lượng lớn nhất." },
+                { text: "Thứ Năm", correct: false, rationale: "Có $4$ điểm $10$." },
+                { text: "Thứ Sáu", correct: false, rationale: "Chỉ có $2$ điểm $10$." }
+            ],
+            answer: "Thứ Tư",
+            hint: "Tìm ngày có số lượng điểm $10$ lớn nhất."
+        },
+        {
+            id: 46,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Dữ liệu điểm 10 môn Toán theo ngày là: Thứ Hai: $2$, Thứ Ba: $3$, Thứ Tư: $5$, Thứ Năm: $4$, Thứ Sáu: $2$. Tổng số học sinh đạt điểm $10$ trong tuần là bao nhiêu?",
+            options: [
+                { text: "14", correct: false, rationale: "Tổng số $= 2 + 3 + 5 + 4 + 2$." },
+                { text: "15", correct: false, rationale: "Tổng số $= 2 + 3 + 5 + 4 + 2$." },
+                { text: "16", correct: true, rationale: "Tổng số $= 2 + 3 + 5 + 4 + 2 = 16$ học sinh." },
+                { text: "18", correct: false, rationale: "Tổng số $= 2 + 3 + 5 + 4 + 2$." }
+            ],
+            answer: "16",
+            hint: "Cộng số điểm $10$ của các ngày trong tuần lại."
+        },
+        {
+            id: 47,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Dữ liệu điểm 10 môn Toán theo ngày là: Thứ Hai: $2$, Thứ Ba: $3$, Thứ Tư: $5$, Thứ Năm: $4$, Thứ Sáu: $2$. Ngày nào có số học sinh đạt điểm $10$ bằng nhau?",
+            options: [
+                { text: "Thứ Hai và Thứ Tư", correct: false, rationale: "Thứ Hai có $2$, Thứ Tư có $5$." },
+                { text: "Thứ Ba và Thứ Năm", correct: false, rationale: "Thứ Ba có $3$, Thứ Năm có $4$." },
+                { text: "Thứ Tư và Thứ Năm", correct: false, rationale: "Thứ Tư có $5$, Thứ Năm có $4$." },
+                { text: "Thứ Hai và Thứ Sáu", correct: true, rationale: "Cả hai ngày đều có $2$ điểm $10$." }
+            ],
+            answer: "Thứ Hai và Thứ Sáu",
+            hint: "Tìm các ngày có cùng giá trị điểm $10$."
+        },
+        {
+            id: 48,
+            type: 'TNC',
+            time: 30, // TĂNG LÊN 30s
+            question: "Tổng số học sinh trong Tổ 1 là bao nhiêu dựa trên bảng điểm (gồm 10 điểm số: $7, 8, 7, 10, 6, 5, 9, 10, 4, 8$)?",
+            options: [
+                { text: "7", correct: false, rationale: "$7$ là một trong các điểm số." },
+                { text: "8", correct: false, rationale: "$8$ là một trong các điểm số." },
+                { text: "10", correct: true, rationale: "Có $10$ điểm số tương ứng với $10$ học sinh trong tổ." },
+                { text: "108", correct: false, rationale: "Đây là tổng các điểm số." }
+            ],
+            answer: "10",
+            hint: "Đếm số lượng học sinh được liệt kê trong bảng."
+        },
+        {
+            id: 49,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Tổng số học viên CLB Tiếng Nhật trong $4$ năm ($2017: 30; 2018: 40; 2019: 50; 2020: 60$) là bao nhiêu?",
+            answer: "180",
+            hint: "Thực hiện phép cộng: $30 + 40 + 50 + 60$."
+        },
+        {
+            id: 50,
+            type: 'TLN',
+            time: 180, // TĂNG LÊN 3 PHÚT (180s)
+            question: "Mức nhiệt độ $-8^{\\circ}C$ cao hơn $-12^{\\circ}C$ bao nhiêu độ?",
+            answer: "4",
+            hint: "Thực hiện phép trừ: $-8 - (-12)$."
+        }
+    ];
+
+    // --- Game State Variables ---
+    let currentQuestionIndex = 0;
+    let timerInterval = null;
+    let restInterval = null;
+    let score = 0;
+    let userName = "";
+    let userClass = "";
+    let isGameRunning = false;
+
+    // --- Utility Functions ---
+    function getElement(id) {
+        return document.getElementById(id);
+    }
+
+    function shuffleArray(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+        }
+        return array;
+    }
+
+    function startTimer(duration, elementId, onTimeout) {
+        let timer = duration;
+        getElement(elementId).textContent = timer;
+        timerInterval = setInterval(() => {
+            timer--;
+            getElement(elementId).textContent = timer;
+            if (timer <= 0) {
+                clearInterval(timerInterval);
+                onTimeout();
+            }
+        }, 1000);
+    }
+
+    function showFeedback(isCorrect) {
+        const feedbackEl = getElement('feedback-message');
+        const feedbackIconEl = getElement('feedback-icon');
+        const overlay = getElement('overlay');
+        const currentQ = QUIZ_QUESTIONS[currentQuestionIndex];
+        
+        let correctAnswerText = currentQ.answer;
+        if (currentQ.type === 'TNC') {
+            const correctOption = currentQ.options.find(opt => opt.correct);
+            if (correctOption) {
+                correctAnswerText = correctOption.text;
+            }
+        }
+
+
+        if (isCorrect) {
+            score++;
+            generateAndPlayAudio('correct');
+            feedbackIconEl.innerHTML = '<span class="text-6xl animate-bounce">🎉</span>';
+            feedbackEl.innerHTML = `CHÍNH XÁC! (+1 điểm)`;
+        } else {
+            generateAndPlayAudio('wrong');
+            feedbackIconEl.innerHTML = '<span class="text-6xl text-red-600 font-bold">❌</span>';
+            feedbackEl.innerHTML = `CHƯA ĐÚNG!`;
+            
+            // LƯU Ý: ĐÃ XÓA DÒNG HIỂN THỊ ĐÁP ÁN ĐÚNG KHI SAI
+            // feedbackEl.innerHTML += `<br><span class="text-base text-red-600 font-semibold">Đáp án đúng: ${correctAnswerText}</span>`;
+        }
+
+        getElement('current-score').textContent = score;
+        overlay.classList.remove('hidden');
+
+        // Bắt đầu thời gian nghỉ 3s
+        let restTime = 3;
+        
+        // Cập nhật: Chỉ cần hiển thị feedback và đếm ngược thời gian nghỉ
+        feedbackEl.innerHTML += `<br><span class="text-lg mt-2 block">Câu hỏi tiếp theo sau ${restTime}s...</span>`;
+        restInterval = setInterval(() => {
+            restTime--;
+            
+            // Lấy lại phần phản hồi (đúng/sai) 
+            let currentFeedback = feedbackEl.innerHTML.split('<br>')[0];
+            
+            feedbackEl.innerHTML = currentFeedback + 
+                                   `<br><span class="text-lg mt-2 block">Câu hỏi tiếp theo sau ${restTime}s...</span>`;
+
+            if (restTime <= 0) {
+                clearInterval(restInterval);
+                overlay.classList.add('hidden');
+                nextQuestion();
+            }
+        }, 1000);
+    }
+
+    function showHint() {
+        const currentQ = QUIZ_QUESTIONS[currentQuestionIndex];
+        const hintEl = getElement('hint-text');
+        hintEl.classList.remove('hidden');
+        hintEl.textContent = `Gợi ý: ${currentQ.hint}`;
+    }
+
+    // --- Game Logic ---
+    function startQuiz() {
+        const nameInput = getElement('name-input').value.trim();
+        const classInput = getElement('class-input').value.trim();
+
+        if (nameInput === "" || classInput === "") {
+            alert("Vui lòng nhập Tên và Lớp để bắt đầu!");
+            return;
+        }
+
+        userName = nameInput;
+        userClass = classInput;
+        isGameRunning = true;
+        score = 0;
+        currentQuestionIndex = -1; // Bắt đầu từ -1 để nextQuestion() chuyển đến 0
+
+        getElement('start-screen').classList.add('hidden');
+        getElement('quiz-screen').classList.remove('hidden');
+        getElement('user-info-display').textContent = `Thí sinh: ${userName} - Lớp: ${userClass}`;
+        getElement('current-score').textContent = score;
+
+        nextQuestion();
+    }
+
+    function nextQuestion() {
+        currentQuestionIndex++;
+        clearInterval(timerInterval);
+        clearInterval(restInterval);
+        getElement('hint-text').classList.add('hidden');
+        getElement('hint-text').textContent = '';
+        isGameRunning = true; // Cập nhật: Luôn cho phép game chạy trước khi render
+
+        if (currentQuestionIndex >= QUIZ_QUESTIONS.length) {
+            showResults();
+            return;
+        }
+
+        const currentQ = QUIZ_QUESTIONS[currentQuestionIndex];
+        renderQuestion(currentQ);
+        const duration = currentQ.time;
+
+        startTimer(duration, 'timer', () => {
+            // Hết giờ
+            checkAnswer(null);
+        });
+    }
+
+    function renderQuestion(q) {
+        getElement('question-counter').textContent = `Câu ${currentQuestionIndex + 1}/${QUIZ_QUESTIONS.length}`;
+        getElement('question-type').textContent = q.type === 'TNC' ? 'TRẮC NGHIỆM' : 'TRẢ LỜI NGẮN';
+        
+        // Cập nhật: KHÔNG loại bỏ dấu đô la, để MathJax tự render công thức
+        getElement('question-text').innerHTML = q.question; 
+        
+        getElement('timer-duration').textContent = q.time + 's';
+        getElement('question-container').dataset.type = q.type;
+
+        const optionsContainer = getElement('options-container');
+        optionsContainer.innerHTML = '';
+        getElement('short-answer-container').classList.add('hidden');
+
+        const elementsToTypeset = [getElement('question-text')]; // Thêm câu hỏi vào danh sách
+
+        if (q.type === 'TNC') {
+            optionsContainer.classList.remove('hidden');
+            // Xáo trộn đáp án
+            const shuffledOptions = shuffleArray([...q.options]);
+
+            shuffledOptions.forEach((option, index) => {
+                const button = document.createElement('button');
+                button.className = 'w-full text-left p-3 my-2 bg-white text-gray-800 rounded-lg shadow-md hover:bg-yellow-100 transition duration-150 border border-gray-300 mathjax-option';
+                button.innerHTML = `<span class="font-bold mr-2">${String.fromCharCode(65 + index)}.</span> ${option.text}`;
+                button.onclick = () => checkAnswer(option.correct ? option.text : option.text); // Gửi nội dung text để kiểm tra
+                optionsContainer.appendChild(button);
+                elementsToTypeset.push(button); // Thêm các nút đáp án vào danh sách
+            });
+            getElement('submit-btn').classList.add('hidden');
+        } else {
+            optionsContainer.classList.add('hidden');
+            getElement('short-answer-container').classList.remove('hidden');
+            getElement('short-answer-input').value = '';
+            getElement('submit-btn').classList.remove('hidden');
+            
+            // Cập nhật quan trọng: Gán lại sự kiện click cho nút GỬI TRẢ LỜI
+            getElement('submit-btn').onclick = () => {
+                // Thêm kiểm tra nếu trò chơi đang nghỉ giữa câu hỏi thì không cho submit
+                if (!isGameRunning) return; 
+                
+                const userAnswer = getElement('short-answer-input').value.trim();
+                checkAnswer(userAnswer);
+            };
+        }
+
+        // Cập nhật: Kích hoạt MathJax để hiển thị công thức sau khi nội dung được tải
+        if (window.MathJax) {
+            // Sử dụng MathJax.typesetPromise và truyền danh sách các phần tử cần render
+            MathJax.typesetPromise(elementsToTypeset).catch((err) => console.error("MathJax typesetting error:", err));
+        }
+    }
+
+    function checkAnswer(userAnswer) {
+        // Cập nhật: Kiểm tra nếu isGameRunning là false thì thoát ngay lập tức
+        if (!isGameRunning) return; 
+        
+        // Cập nhật: Ngay khi nhận câu trả lời, lập tức dừng game để xử lý
+        isGameRunning = false; 
+        clearInterval(timerInterval);
+
+        const currentQ = QUIZ_QUESTIONS[currentQuestionIndex];
+        let isCorrect = false;
+
+        if (userAnswer === null) { // Hết giờ
+            showFeedback(false);
+            return;
+        }
+
+        if (currentQ.type === 'TNC') {
+            const selectedOption = currentQ.options.find(opt => opt.text === userAnswer);
+            isCorrect = selectedOption && selectedOption.correct;
+        } else { // TLN
+            // So sánh câu trả lời ngắn, không phân biệt chữ hoa/thường và khoảng trắng thừa
+            const normalizedUserAnswer = userAnswer.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const normalizedCorrectAnswer = currentQ.answer.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+            if (currentQ.id === 6 || currentQ.id === 7 || currentQ.id === 9 || currentQ.id === 16 || currentQ.id === 18 || currentQ.id === 23 || currentQ.id === 26 || currentQ.id === 28 || currentQ.id === 30 || currentQ.id === 32 || currentQ.id === 34 || currentQ.id === 37 || currentQ.id === 39 || currentQ.id === 40 || currentQ.id === 49 || currentQ.id === 50) {
+                 // Cho các câu trả lời ngắn là số, chỉ so sánh giá trị số
+                isCorrect = parseFloat(userAnswer) === parseFloat(currentQ.answer);
+            } else {
+                // Cho các câu trả lời ngắn là văn bản/biểu thức, so sánh chuỗi đã chuẩn hóa
+                 isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+            }
+        }
+
+        showFeedback(isCorrect);
+        // Sau khi showFeedback, isGameRunning sẽ được thiết lập lại là true khi chuyển sang câu tiếp theo (hoặc hết giờ nghỉ)
+    }
+
+    function showResults() {
+        clearInterval(timerInterval);
+        getElement('quiz-screen').classList.add('hidden');
+        getElement('results-screen').classList.remove('hidden');
+
+        const totalQuestions = QUIZ_QUESTIONS.length;
+        const finalScore = score;
+        const percentage = ((finalScore / totalQuestions) * 100).toFixed(1);
+
+        getElement('final-name').textContent = userName;
+        getElement('final-class').textContent = userClass;
+        getElement('final-score').textContent = finalScore;
+        getElement('total-questions').textContent = totalQuestions;
+        getElement('score-percentage').textContent = percentage + '%';
+
+        let rankMessage = "";
+        if (percentage >= 90) {
+            rankMessage = "Xuất sắc! Bạn nắm vững kiến thức rất tốt. 🎉";
+        } else if (percentage >= 70) {
+            rankMessage = "Giỏi! Cố gắng luyện tập thêm ở các câu sai nhé. 👍";
+        } else if (percentage >= 50) {
+            rankMessage = "Khá! Bạn cần ôn lại các phần còn yếu.";
+        } else {
+            rankMessage = "Cần tăng cường ôn tập để đạt kết quả tốt hơn.";
+        }
+        getElement('rank-message').textContent = rankMessage;
+    }
+
+    // Tải MathJax (được gọi sau khi cấu hình)
+    function loadMathJaxScript() {
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js';
+        script.async = true;
+        document.head.appendChild(script);
+    }
+
+    function startInitialSetup() {
+        // Xáo trộn thứ tự câu hỏi khi tải trang
+        shuffleArray(QUIZ_QUESTIONS);
+    }
+    
+    // Bắt đầu tải MathJax
+    loadMathJaxScript();
+
+</script>
+
+<div class="min-h-screen bg-gray-100 flex items-center justify-center font-sans">
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
+        <h1 class="text-3xl font-extrabold text-blue-600 mb-4 text-center">TRÒ CHƠI ÔN TẬP TOÁN 6</h1>
+        <p class="text-center text-gray-600 mb-6">Sẵn sàng thử thách với 50 câu hỏi từ đề cương?</p>
+
+        <div class="mb-4">
+            <label for="name-input" class="block text-sm font-medium text-gray-700">Tên của bạn:</label>
+            <input type="text" id="name-input" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Nguyễn Văn A">
+        </div>
+
+        <div class="mb-6">
+            <label for="class-input" class="block text-sm font-medium text-gray-700">Lớp:</label>
+            <input type="text" id="class-input" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="6A1">
+        </div>
+
+        <button onclick="startQuiz()" class="w-full bg-green-500 text-white py-3 rounded-lg font-semibold text-lg hover:bg-green-600 transition duration-150 shadow-lg transform hover:scale-105">
+            BẮT ĐẦU KIỂM TRA
+        </button>
+    </div>
+
+    <!-- Quiz Screen -->
+    <div id="quiz-screen" class="hidden w-full max-w-3xl">
+        <div class="bg-white p-6 rounded-xl shadow-2xl">
+            <!-- Header/Info -->
+            <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-200">
+                <div class="text-sm font-medium text-gray-600" id="user-info-display"></div>
+                <div class="flex items-center space-x-4">
+                    <span class="text-lg font-bold text-gray-800">Điểm: <span id="current-score" class="text-blue-600">0</span></span>
+                    <span class="text-lg font-bold text-gray-800" id="question-counter">Câu 1/50</span>
+                </div>
+            </div>
+
+            <!-- Timer & Type -->
+            <div class="flex justify-between items-center mb-6">
+                <span id="question-type" class="px-3 py-1 bg-purple-100 text-purple-800 text-sm font-semibold rounded-full">TRẮC NGHIỆM</span>
+                <div class="flex items-center space-x-2 bg-red-500 text-white px-4 py-2 rounded-full shadow-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l3 3a1 1 0 001.414-1.414L11 9.586V6z" clip-rule="evenodd" />
+                    </svg>
+                    <span class="font-bold">Thời gian: <span id="timer">15</span>s</span>
+                    <span id="timer-duration" class="hidden"></span>
+                </div>
+            </div>
+
+            <!-- Question -->
+            <div id="question-container" class="mb-8">
+                <p id="question-text" class="text-xl font-semibold text-gray-900 mb-4"></p>
+                <div id="options-container" class="space-y-3">
+                    <!-- Options will be rendered here -->
+                </div>
+                <!-- Short Answer Input -->
+                <div id="short-answer-container" class="hidden">
+                    <input type="text" id="short-answer-input" class="mt-1 block w-full px-4 py-3 border-2 border-blue-300 rounded-lg shadow-inner focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-lg" placeholder="Nhập câu trả lời của bạn">
+                </div>
+                <button id="submit-btn" class="hidden mt-4 w-full bg-blue-500 text-white py-3 rounded-lg font-semibold text-lg hover:bg-blue-600 transition duration-150">
+                    GỬI TRẢ LỜI
+                </button>
+            </div>
+
+            <!-- Hint -->
+            <p id="hint-text" class="hidden text-sm text-yellow-700 bg-yellow-50 p-3 rounded-lg border-l-4 border-yellow-400 cursor-pointer" onclick="showHint()"></p>
+             <button onclick="showHint()" class="mt-4 text-blue-500 hover:text-blue-700 font-medium text-sm">
+                [Gợi ý]
+            </button>
+        </div>
+    </div>
+
+    <!-- Overlay Feedback -->
+    <div id="overlay" class="fixed inset-0 bg-black bg-opacity-70 z-50 hidden flex items-center justify-center">
+        <div class="bg-white p-8 rounded-xl shadow-2xl text-center">
+            <div id="feedback-icon" class="mb-4"></div>
+            <p id="feedback-message" class="text-2xl font-bold text-gray-800"></p>
+        </div>
+    </div>
+
+    <!-- Results Screen -->
+    <div id="results-screen" class="hidden w-full max-w-md">
+        <div class="bg-white p-8 rounded-xl shadow-2xl text-center">
+            <h2 class="text-3xl font-extrabold text-green-600 mb-4">KẾT QUẢ KIỂM TRA</h2>
+            <div class="mb-6 space-y-2">
+                <p class="text-lg">Thí sinh: <span id="final-name" class="font-bold text-gray-800"></span></p>
+                <p class="text-lg">Lớp: <span id="final-class" class="font-bold text-gray-800"></span></p>
+            </div>
+
+            <div class="bg-blue-50 p-6 rounded-lg mb-6">
+                <p class="text-xl font-medium text-gray-700">Điểm số cuối cùng:</p>
+                <p class="text-5xl font-extrabold text-blue-600 my-2">
+                    <span id="final-score">0</span> / <span id="total-questions">50</span>
+                </p>
+                <p class="text-xl font-medium text-gray-700">Tỷ lệ chính xác: <span id="score-percentage" class="text-blue-600 font-extrabold">0%</span></p>
+            </div>
+
+            <p id="rank-message" class="text-lg font-semibold text-gray-800 mb-6"></p>
+
+            <button onclick="window.location.reload()" class="w-full bg-red-500 text-white py-3 rounded-lg font-semibold text-lg hover:bg-red-600 transition duration-150 shadow-lg">
+                THỬ LẠI
+            </button>
+        </div>
+    </div>
+</div>
